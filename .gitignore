@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+.venv
+venv/
+history.json
+*.mp4
+*.mp3
+*.webm
