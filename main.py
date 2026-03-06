@@ -1,29 +1,18 @@
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 from fastapi.templating import Jinja2Templates
 import yt_dlp
-import os
-import tempfile
-import json
-import time
+import os, shutil, tempfile, json, time
 from typing import Optional
 from pathlib import Path
 
 app = FastAPI(title="AnyDownloader", version="2.0.0")
 templates = Jinja2Templates(directory="templates")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 HISTORY_FILE = "history.json"
-
-
-# ─── HISTORY HELPERS ───────────────────────────────────────────
 
 def load_history() -> list:
     if not Path(HISTORY_FILE).exists():
@@ -37,19 +26,13 @@ def load_history() -> list:
 def save_history(entry: dict):
     history = load_history()
     history.insert(0, entry)
-    history = history[:50]  # max 50 item
+    history = history[:50]
     with open(HISTORY_FILE, "w") as f:
         json.dump(history, f)
-
-
-# ─── PAGES ─────────────────────────────────────────────────────
 
 @app.get("/")
 def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
-
-
-# ─── API: INFO ─────────────────────────────────────────────────
 
 @app.get("/api/info")
 def get_info(url: str = Query(...)):
@@ -58,7 +41,6 @@ def get_info(url: str = Query(...)):
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=False)
 
-        # Filter format yang punya video atau audio
         formats = []
         seen = set()
         for f in info.get("formats", []):
@@ -93,14 +75,10 @@ def get_info(url: str = Query(...)):
             "webpage_url": info.get("webpage_url"),
             "formats": formats,
         }
-
     except yt_dlp.utils.DownloadError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ─── API: DOWNLOAD ─────────────────────────────────────────────
 
 @app.get("/api/download")
 def download(
@@ -139,14 +117,14 @@ def download(
             if not files:
                 raise HTTPException(status_code=500, detail="File tidak ditemukan")
 
-            filepath = os.path.join(tmpdir, files[0])
+            src = os.path.join(tmpdir, files[0])
             filename = files[0]
-            media_type = "audio/mpeg" if audio_only else "video/mp4"
+            persistent_path = f"/tmp/{int(time.time()*1000)}_{filename}"
+            shutil.copy2(src, persistent_path)
+            filesize = os.path.getsize(persistent_path)
 
-            with open(filepath, "rb") as f:
-                file_bytes = f.read()
+        media_type = "audio/mpeg" if audio_only else "video/mp4"
 
-        # Simpan ke history
         save_history({
             "id": str(int(time.time() * 1000)),
             "url": url,
@@ -157,20 +135,26 @@ def download(
             "type": "audio" if audio_only else "video",
             "format": "MP3" if audio_only else format,
             "timestamp": int(time.time()),
-            "filesize": len(file_bytes),
+            "filesize": filesize,
         })
 
-        def stream():
-            chunk = 1024 * 1024
-            for i in range(0, len(file_bytes), chunk):
-                yield file_bytes[i:i + chunk]
+        def stream_file():
+            try:
+                with open(persistent_path, "rb") as f:
+                    while chunk := f.read(512 * 1024):
+                        yield chunk
+            finally:
+                try:
+                    os.remove(persistent_path)
+                except:
+                    pass
 
         return StreamingResponse(
-            stream(),
+            stream_file(),
             media_type=media_type,
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
-                "Content-Length": str(len(file_bytes)),
+                "Content-Length": str(filesize),
             }
         )
 
@@ -178,9 +162,6 @@ def download(
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
-
-# ─── API: HISTORY ──────────────────────────────────────────────
 
 @app.get("/api/history")
 def get_history():
@@ -199,9 +180,6 @@ def delete_history_item(item_id: str):
     with open(HISTORY_FILE, "w") as f:
         json.dump(history, f)
     return {"status": "deleted"}
-
-
-# ─── API: HEALTH ───────────────────────────────────────────────
 
 @app.get("/api/health")
 def health():
