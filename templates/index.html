@@ -690,7 +690,20 @@ async function startDownload() {
     a.click();
     URL.revokeObjectURL(a.href);
 
+    addToHistory({
+      id: String(Date.now()),
+      url,
+      title: currentInfo.title || 'Unknown',
+      thumbnail: currentInfo.thumbnail || '',
+      platform: currentInfo.platform || '',
+      filename,
+      type: audioOnly ? 'audio' : 'video',
+      timestamp: Math.floor(Date.now() / 1000),
+      filesize: blob.size,
+    });
+
     toast('Download complete! 🎉', 'success');
+    loadHistory();
     loadHistory();
 
     setTimeout(hideProgress, 2000);
@@ -722,11 +735,26 @@ function clearPreview() {
   currentInfo = null;
 }
 
-// ── HISTORY ───────────────────────────────
-async function loadHistory() {
-  const res = await fetch('/api/history');
-  const history = await res.json();
-  renderHistory(history);
+// ── HISTORY (localStorage — private per browser) ──────────────
+const HISTORY_KEY = 'anydownloader_history';
+
+function getLocalHistory() {
+  try { return JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]'); }
+  catch { return []; }
+}
+
+function saveLocalHistory(history) {
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 50)));
+}
+
+function addToHistory(entry) {
+  const history = getLocalHistory();
+  history.unshift(entry);
+  saveLocalHistory(history);
+}
+
+function loadHistory() {
+  renderHistory(getLocalHistory());
 }
 
 function renderHistory(history) {
@@ -767,16 +795,17 @@ function renderHistory(history) {
   }).join('');
 }
 
-async function deleteHistory(id) {
-  await fetch(`/api/history/${id}`, { method: 'DELETE' });
+function deleteHistory(id) {
+  const history = getLocalHistory().filter(h => h.id !== id);
+  saveLocalHistory(history);
   document.getElementById(`hist-${id}`)?.remove();
   const list = document.getElementById('historyList');
-  if (!list.children.length) loadHistory();
+  if (!list.querySelector('.history-item')) loadHistory();
 }
 
-async function clearAllHistory() {
+function clearAllHistory() {
   if (!confirm('Clear all download history?')) return;
-  await fetch('/api/history', { method: 'DELETE' });
+  localStorage.removeItem(HISTORY_KEY);
   loadHistory();
   toast('History cleared', 'success');
 }
